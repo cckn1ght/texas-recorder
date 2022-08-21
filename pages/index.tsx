@@ -3,8 +3,6 @@ import Head from 'next/head'
 import styles from '../styles/Home.module.css'
 import {
   AlertDialog,
-  Stat,
-  StatNumber,
   AlertDialogBody,
   AlertDialogContent,
   AlertDialogFooter,
@@ -20,6 +18,10 @@ import {
   NumberInput,
   NumberInputField,
   NumberInputStepper,
+  SkeletonText,
+  Stack,
+  Stat,
+  StatNumber,
   Table,
   TableCaption,
   TableContainer,
@@ -30,18 +32,28 @@ import {
   Thead,
   Tr,
   useBoolean,
-  useDisclosure, Stack, Skeleton, SkeletonText,
+  useDisclosure,
 } from '@chakra-ui/react'
 import React, {useEffect, useMemo, useState} from 'react';
 import _ from 'lodash';
+import useSWR from "swr";
+import {ChipData, ChipsData} from "./api/chips-data";
+import axios from 'axios'
+import {ChipDataRes} from "./api/chip-data/[index]";
 
-type ChipData = {
-  name: string;
-  borrowed: number;
-  left?: number;
-  total?: number;
+const ChipsDataStorageKey = 'chips_data';
+
+const fetcher = (url: string) => axios.get(url).then(res => res.data)
+
+const ChipsDataAPI = "/api/chips-data";
+const UpdateChipDataAPI = "/api/chip-data";
+const saveChipsDataToAPi = (data: ChipData[]): Promise<ChipsData> => {
+  return axios.post<ChipsData>(ChipsDataAPI, {data}).then(res => res.data);
 }
-const ChipsDataStorageKey = 'chipsData';
+
+const saveOneChipDataToAPi = (chipData: ChipData, index: number): Promise<ChipDataRes> => {
+  return axios.put<ChipDataRes>(`${UpdateChipDataAPI}/${index.toString()}`, chipData).then(res => res.data);
+}
 
 const Home: NextPage = () => {
   const [inited, setInited] = useBoolean(false);
@@ -51,59 +63,69 @@ const Home: NextPage = () => {
   const [chipsData, setChipsData] = useState<ChipData[]>([]);
   const {isOpen, onOpen, onClose} = useDisclosure()
   const cancelRef: any = React.useRef()
+  const { data: remoteChipsData } = useSWR<ChipsData>(ChipsDataAPI, fetcher)
 
   useEffect(() => {
-    const cache = localStorage.getItem(ChipsDataStorageKey);
-    if (cache) {
-      const cData = JSON.parse(cache) as ChipData[];
-      setPeople(cData.length);
-      setChipsData(cData);
-      setOk.on();
+    if (remoteChipsData && remoteChipsData.data.length > 0) {
+      const {data} = remoteChipsData;
+      setPeople(data.length);
+      setChipsData(data);
+      if (!ok) {
+        setOk.on();
+      }
     }
-    setInited.on();
+    if (!inited) {
+      setInited.on();
+    }
     return () => {
       debouncedSaveChipData.cancel();
     }
-  }, [])
-  useEffect(() => {
-    debouncedSaveChipData(chipsData);
-  }, [chipsData])
+  }, [remoteChipsData])
+  // useEffect(() => {
+  //   debouncedSaveChipData(chipsData);
+  // }, [chipsData])
   const onOk = () => {
+    const newChips = Array.from({length: people}).map(v => ({name: '', borrowed: chips}));
+    setChipsData(newChips);
+    saveChipsDataToAPi(newChips)
     setOk.on();
-    setChipsData(Array.from({length: people}).map(v => ({name: '', borrowed: chips})))
   }
 
   const onReset = () => {
     setOk.off();
     setChipsData([]);
-    localStorage.removeItem(ChipsDataStorageKey);
+    // localStorage.removeItem(ChipsDataStorageKey);
+    saveChipsDataToAPi([]);
     onClose();
   }
   const onAddPerson = () => {
     setPeople(prev => prev + 1);
-    setChipsData(prev => [...prev, {name: '', borrowed: chips}])
-  }
-
-  const updateChipData = (data: ChipData, index: number) => {
     setChipsData(prev => {
-      const newChipsData = [...prev];
-      const theData = {...data};
-      if (theData.left !== undefined) {
-        theData.total = theData.left - theData.borrowed;
-      } else {
-        theData.left = undefined;
-        theData.total = undefined;
-      }
-      newChipsData[index] = theData;
-      return newChipsData;
+      const newChips = [...prev, {name: '', borrowed: chips}];
+      saveChipsDataToAPi(newChips);
+      return newChips;
     })
   }
 
-  const saveChipsData = (cData: ChipData[]) => {
-    localStorage.setItem(ChipsDataStorageKey, JSON.stringify(cData));
+  const updateChipData = (data: ChipData, index: number) => {
+    const theData = {...data};
+    if (theData.left !== undefined) {
+      theData.total = theData.left - theData.borrowed;
+    } else {
+      theData.left = undefined;
+      theData.total = undefined;
+    }
+    setChipsData(prev => {
+      const newChipsData = [...prev];
+      newChipsData[index] = theData;
+      return newChipsData;
+    })
+
+    debouncedSaveChipData(theData, index)
   }
+
   const debouncedSaveChipData = useMemo(
-    () => _.debounce(saveChipsData, 1000)
+    () => _.debounce(saveOneChipDataToAPi, 1000)
     , []);
 
   const renderTotal = (total?: number) => {
@@ -222,6 +244,7 @@ const Home: NextPage = () => {
                           </Td>
                           <Td>
                             <NumberInput min={0} defaultValue={0}
+                                         value={chipData.left}
                                          onChange={(sv, value) => updateChipData({
                                            ...chipData,
                                            left: isNaN(value) ? undefined : value
